@@ -1,6 +1,7 @@
 fastapi
 uvicorn
-opencv-python-headless
+opencv-python-headless==4.8.0.74
+numpy>=1.21.2
 pyzbar
 ultralytics
 python-multipart
