@@ -4,4 +4,3 @@ opencv-python-headless
 pyzbar
 ultralytics
 numpy
-libzbar0
