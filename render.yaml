@@ -12,9 +12,10 @@
 #       apt-get install -y zbar-tools libzbar-dev
 services:
   - type: web
-    name: barcode-scanner
-    env: docker
-    dockerfilePath: ./Dockerfile
+    name: barcode-detection-api
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
     envVars:
-      - key: PORT
-        value: 8000
+      - key: PYTHON_VERSION
+        value: 3.9
