@@ -1,113 +1,112 @@
-import uvicorn
 from fastapi import FastAPI, File, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 import cv2
-from pyzbar.pyzbar import decode
-from ultralytics import YOLO
 import numpy as np
-import tempfile
+from io import BytesIO
+import uvicorn
 
 # Initialize FastAPI app
-app = FastAPI()
+app = FastAPI(title="Barcode Detection API")
 
-# Add CORS middleware
+# Initialize the OpenCV barcode detector
+bd = cv2.barcode.BarcodeDetector()
+
+# Function to process and detect barcodes from the image
+def process_barcode(img: BytesIO):
+    # Convert the uploaded image into a format suitable for OpenCV
+    image_array = np.frombuffer(img.getvalue(), np.uint8)
+    image = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+    
+    # Detect and decode barcodes
+    ret_bc, decoded_info, _, points = bd.detectAndDecode(image)
+    
+    result = {}
+    
+    if ret_bc:
+        # Draw polygons around detected barcodes
+        image = cv2.polylines(image, points.astype(int), True, (0, 255, 0), 3)
+        
+        # Process each detected barcode
+        for idx, (info, point) in enumerate(zip(decoded_info, points)):
+            if info:
+                # Add detected barcode to results
+                result[f"barcode_{idx+1}"] = {
+                    "data": info,
+                    "coordinates": point.tolist()
+                }
+                
+                # Add text annotation to image
+                image = cv2.putText(
+                    image,
+                    info,
+                    point[1].astype(int),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    2,
+                    (0, 0, 255),
+                    2,
+                    cv2.LINE_AA
+                )
+    
+    return result
+
+# API endpoint to handle barcode detection from an uploaded image
+@app.post("/decode-barcode")
+async def decode_barcode(image: UploadFile = File(...)):
+    try:
+        # Validate file type
+        if not image.content_type.startswith('image/'):
+            return JSONResponse(
+                content={"error": "Uploaded file must be an image"},
+                status_code=400
+            )
+        
+        # Read image content
+        contents = await image.read()
+        img = BytesIO(contents)
+        
+        # Process barcode detection
+        barcode_data = process_barcode(img)
+        
+        if barcode_data:
+            return JSONResponse(content={
+                "status": "success",
+                "barcodes": barcode_data
+            })
+        else:
+            return JSONResponse(
+                content={"status": "no_barcode", "message": "No barcodes detected"},
+                status_code=404
+            )
+            
+    except Exception as e:
+        return JSONResponse(
+            content={"status": "error", "message": str(e)},
+            status_code=500
+        )
+
+# Add CORS middleware if needed
+from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Allows all origins
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
 )
 
-# Load the YOLOv8n model
-model = YOLO('barcode.pt')
+# For deployment to render.com
+# Create a new file named render.yaml in your project root with:
+"""
+services:
+  - type: web
+    name: barcode-detection-api
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9
+"""
 
-# Function to rotate the image by a given angle
-def rotate_image(image, angle):
-    (h, w) = image.shape[:2]
-    center = (w // 2, h // 2)
-
-    # Generate a rotation matrix
-    M = cv2.getRotationMatrix2D(center, angle, 1.0)
-
-    # Perform the rotation
-    rotated = cv2.warpAffine(image, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255))
-    return rotated
-
-# Function to decode barcodes from a rotated image
-def decode_rotated_barcode(region):
-    for angle in range(0, 360, 30):  # Rotate in 30-degree intervals
-        rotated_region = rotate_image(region, angle)
-
-        # Convert to grayscale and preprocess
-        gray = cv2.cvtColor(rotated_region, cv2.COLOR_BGR2GRAY)
-        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-        # Decode barcodes
-        detectedBarcodes = decode(thresh)
-
-        if detectedBarcodes:
-            for barcode in detectedBarcodes:
-                if barcode.data:
-                    return {
-                        "data": barcode.data.decode('utf-8'),
-                        "type": barcode.type,
-                        "image": rotated_region
-                    }
-    return None
-
-@app.get('/')
-def index():
-    return {"message": "Barcode Detection API - Upload an image to /decode"}
-
-@app.post('/decode')
-async def decode_image(file: UploadFile = File(...)):
-    try:
-        # Read the uploaded image
-        contents = await file.read()
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
-            temp_file.write(contents)
-            temp_file_path = temp_file.name
-
-        # Load the image using OpenCV
-        frame = cv2.imread(temp_file_path)
-
-        # Run YOLO inference
-        results = model(frame)
-
-        barcode_detected = False
-        barcodes_info = []
-
-        # Access bounding boxes for the detected objects
-        for r in results:
-            boxes = r.boxes.xyxy.cpu().numpy()
-
-            for box in boxes:
-                x1, y1, x2, y2 = map(int, box)
-
-                # Extract the barcode region
-                barcode_region = frame[y1:y2, x1:x2]
-
-                # Attempt to decode barcode with rotation
-                decoded = decode_rotated_barcode(barcode_region)
-                if decoded:
-                    barcodes_info.append({
-                        "data": decoded["data"],
-                        "type": decoded["type"]
-                    })
-                    barcode_detected = True
-
-        # Response
-        if barcode_detected:
-            return {
-                "message": "Barcodes decoded successfully.",
-                "barcodes": barcodes_info
-            }
-        else:
-            return {"message": "No barcodes were successfully decoded."}
-
-    except Exception as e:
-        return {"error": str(e)}
-
-if __name__ == '__main__':
-     uvicorn.run(app, host='0.0.0.0', port=10000)
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
