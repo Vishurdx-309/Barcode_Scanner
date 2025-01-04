@@ -97,7 +97,7 @@ def verify_barcode_format(sample_file, barcode_content):
         "is_valid": true/false,
         "format": "barcode standard name",
         "validation_details": "explanation of validity"
-    }}"""
+    }}
 
     response = model.generate_content([verify_prompt])
     response_text = response.text.strip()
