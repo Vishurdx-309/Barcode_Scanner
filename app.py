@@ -26,37 +26,48 @@ def process_barcode(img: BytesIO):
     if image is None:
         raise ValueError("Could not decode image")
     
-    # Detect and decode barcodes
-    ret_bc, decoded_info, _, points = bd.detectAndDecode(image)
-    
-    result = {}
-    
-    if ret_bc:
-        # Draw polygons around detected barcodes
-        image = cv2.polylines(image, points.astype(int), True, (0, 255, 0), 3)
+    try:
+        # Handle different versions of OpenCV BarcodeDetector
+        detect_result = bd.detectAndDecode(image)
         
-        # Process each detected barcode
-        for idx, (info, point) in enumerate(zip(decoded_info, points)):
-            if info:
-                # Add detected barcode to results
-                result[f"barcode_{idx+1}"] = {
-                    "data": info,
-                    "coordinates": point.tolist()
-                }
-                
-                # Add text annotation to image
-                image = cv2.putText(
-                    image,
-                    info,
-                    point[1].astype(int),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    2,
-                    (0, 0, 255),
-                    2,
-                    cv2.LINE_AA
-                )
-    
-    return result
+        # Check the number of returned values
+        if len(detect_result) == 3:
+            ret_bc, decoded_info, points = detect_result
+        else:
+            ret_bc, decoded_info, types, points = detect_result
+        
+        result = {}
+        
+        if ret_bc and points is not None and len(points) > 0:
+            # Draw polygons around detected barcodes
+            image = cv2.polylines(image, points.astype(int), True, (0, 255, 0), 3)
+            
+            # Process each detected barcode
+            for idx, (info, point) in enumerate(zip(decoded_info, points)):
+                if info:
+                    # Add detected barcode to results
+                    result[f"barcode_{idx+1}"] = {
+                        "data": info,
+                        "coordinates": point.tolist()
+                    }
+                    
+                    # Add text annotation to image
+                    image = cv2.putText(
+                        image,
+                        info,
+                        point[1].astype(int),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        2,
+                        (0, 0, 255),
+                        2,
+                        cv2.LINE_AA
+                    )
+        
+        return result
+        
+    except Exception as e:
+        print(f"Error in barcode detection: {str(e)}")
+        return {}
 
 # API endpoint to handle barcode detection from an uploaded image
 @app.post("/decode-barcode")
@@ -83,9 +94,9 @@ async def decode_barcode(image: UploadFile = File(...)):
         try:
             # Process barcode detection
             barcode_data = process_barcode(img)
-        except ValueError as e:
+        except Exception as e:
             return JSONResponse(
-                content={"status": "error", "message": str(e)},
+                content={"status": "error", "message": f"Error processing image: {str(e)}"},
                 status_code=400
             )
         
